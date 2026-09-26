@@ -1,0 +1,59 @@
+name: APK Build
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: macos-latest
+          arch: arm64
+          runner: macos-latest
+          expander_leg: macos-latest--arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+    - name: Checkout the code
+      uses: actions/checkout@v2
+      # Temurin does not publish a JDK 17 build for Windows on arm64, so setup-java cannot
+      # find a matching version there. The Microsoft Build of OpenJDK does ship JDK 17 for
+      # Windows aarch64, so use it on that runner and keep Temurin everywhere else.
+    - name: Setup Java JDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: ${{ matrix.runner == 'windows-11-arm' && 'microsoft' || 
+          'temurin' }}
+        java-version: '17'
+      # The ubuntu-24.04-arm and windows-11-arm runner images do not include the Android
+      # SDK that the x64 images have preinstalled, so install it here. The default packages
+      # ('tools platform-tools') are not published for arm64 Linux hosts, so install
+      # only the platform package, which works on any architecture. AGP downloads
+      # the build-tools it needs on its own, because the licenses are already accepted.
+      # On Windows arm64 the x64 build-tools binaries run through the built-in x64 emulation.
+    - name: Setup Android SDK
+      if: matrix.runner == 'ubuntu-24.04-arm' || matrix.runner == 
+        'windows-11-arm'
+      uses: android-actions/setup-android@v3
+      with:
+        packages: 'platforms;android-34'
+      # Google publishes the Linux Android build tools (for example aapt2 from Maven)
+      # only as x86_64 binaries, so run them on arm64 Linux through qemu user-mode emulation.
+    - name: Enable x86_64 emulation for Android build tools
+      if: matrix.runner == 'ubuntu-24.04-arm'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-user-static binfmt-support libc6-amd64-cross libstdc++6-amd64-cross libgcc-s1-amd64-cross
+        sudo update-binfmts --enable qemu-x86_64 || true
+        echo "QEMU_LD_PREFIX=/usr/x86_64-linux-gnu" >> "$GITHUB_ENV"
+    - name: Build the app
+      run: |
+        chmod +x gradlew
+        ./gradlew build
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: debug-apk-${{ matrix.os }}-${{ matrix.arch }}
+        path: app/build/outputs/apk/debug/*.apk
+        if-no-files-found: error
+    name: build [${{ matrix.expander_leg }}]
+    timeout-minutes: 150
